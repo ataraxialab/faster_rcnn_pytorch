@@ -29,13 +29,11 @@ def log_print(text, color=None, on_color=None, attrs=None):
     else:
         print(text)
 
-
-
 # hyper-parameters
 # ------------
 print "initialize"
-imdb_name = 'imagenet_2015_train'
-cfg_file = 'experiments/cfgs/faster_rcnn_end2end_FPN.yml'
+imdb_name = 'imagenet_small_2015_train'
+cfg_file = 'experiments/cfgs/faster_rcnn_end2end.yml'
 pretrained_model = '/disk2/data/pytorch_models/resnet152-b121ed2d.pth'
 output_dir = '/disk2/data/pytorch_models/trained_models/resnet152_imgsize600_fpn_smalldb/saved_model3'
 
@@ -46,7 +44,7 @@ lr_decay_steps = {200000,400000}
 lr_decay = 1./10
 
 rand_seed = 1024
-_DEBUG = True
+_DEBUG = False
 use_tensorboard = True
 remove_all_log = False   # remove all historical experiments in TensorBoard
 exp_name = None # the previous experiment name in TensorBoard
@@ -137,10 +135,15 @@ for step in range(start_step, end_step+1):
     step_cnt += 1
 
     # backward
+    t1 = Timer()
+    t1.tic()
     optimizer.zero_grad()
     loss.backward()
     network_FPN.clip_gradient(net, 10.)
     optimizer.step()
+    backward_time = t1.toc(average=False)
+    if _DEBUG:
+        print "backward time:{}s".format(backward_time)
 
     if step % disp_interval == 0:
         duration = t.toc(average=False)
