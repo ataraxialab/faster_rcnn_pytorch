@@ -82,7 +82,7 @@ def load_pretrained_npy(faster_rcnn_model, fname):
         frcnn_dict[key].copy_(param)
 
 
-def load_pretrained_pth(faster_rcnn_model, fname):
+def load_pretrained_pth_FPN(faster_rcnn_model, fname):
     print "load pretrained model from:{}".format(fname)
     params = torch.load(fname)
     resnet_dict = faster_rcnn_model.fpn_feature.state_dict()
@@ -90,7 +90,7 @@ def load_pretrained_pth(faster_rcnn_model, fname):
         val.copy_(params[name])
     print "done"
 
-def load_pretrained_pth_FPN(faster_rcnn_model, fname):
+def load_pretrained_pth(faster_rcnn_model, fname):
     print "load pretrained model from:{}".format(fname)
     params = torch.load(fname)
     resnet_dict = faster_rcnn_model.rpn.features.state_dict()
