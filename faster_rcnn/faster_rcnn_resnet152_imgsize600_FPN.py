@@ -60,20 +60,14 @@ class RPN(nn.Module):
 
         # proposal layer
         cfg_key = 'TRAIN' if self.training else 'TEST'
-        start_time1 = time.time()
         rois = self.proposal_layer(rpn_cls_prob_reshape, rpn_bbox_pred, im_info,
                                    cfg_key, _feat_stride, anchor_scales)
-        end_time1=time.time()
-        print "rois:{}, proposal layer time:{}s".format(rois.size(), end_time1-start_time1)
         # generating training labels and build the rpn loss
         if self.training:
             assert gt_boxes is not None
-            start_time1 = time.time()
             rpn_data = self.anchor_target_layer(rpn_cls_score, gt_boxes, gt_ishard, dontcare_areas,
                                                 im_info, _feat_stride, anchor_scales)
-            end_time1=time.time()
-            
-            print "anchor target layer time:{}s".format(end_time1-start_time1)
+
             self.cross_entropy, self.loss_box = self.build_loss(rpn_cls_score_reshape, rpn_bbox_pred, rpn_data)
 
         return rois
@@ -220,13 +214,9 @@ class FasterRCNN(nn.Module):
     def forward(self, im_data, im_info, gt_boxes=None, gt_ishard=None, dontcare_areas=None):
         im_data = network.np_to_variable(im_data, is_cuda=True)
         im_data = im_data.permute(0, 3, 1, 2)
-        start_time = time.time()
         C2_feature, C3_feature, C4_feature, C5_feature = self.fpn_feature(im_data)
-        end_time = time.time()
         if self.debug:
-            print "get fpn_feature time:{}s".format(end_time-start_time)
             print "size:{},{},{},{},{}".format(im_data.size(),C2_feature.size(),C3_feature.size(),C4_feature.size(),C5_feature.size())
-        start_time =time.time()
         #fpn: layer P5
         P5_feature = self.c5_conv1(C5_feature)
         if self.debug:
@@ -261,34 +251,15 @@ class FasterRCNN(nn.Module):
         P2_feature = self.c2_conv3(P2_feature)
         if self.debug:
              print "P2_feature:{}".format(P2_feature.size())
-        end_time = time.time()
-        if self.debug:
-            print "get P2-P5 feature time:{}s".format(end_time-start_time)
-        start_time = time.time()
+
         P5_rois = self.rpn(P5_feature, im_info, gt_boxes, gt_ishard, dontcare_areas, anchor_scales=[16,], _feat_stride=[32,])
-        end_time = time.time()
-        if self.debug:
-            print "P5 rpn time:{}s".format(end_time-start_time)
-        start_time = time.time()
         P4_rois = self.rpn(P4_feature, im_info, gt_boxes, gt_ishard, dontcare_areas, anchor_scales=[8,], _feat_stride=[16,])
-        end_time = time.time()
-        if self.debug:
-            print "P4 rpn time:{}s".format(end_time-start_time)
-        start_time = time.time()
         P3_rois = self.rpn(P3_feature, im_info, gt_boxes, gt_ishard, dontcare_areas, anchor_scales=[4,], _feat_stride=[8,])
-        end_time = time.time()
-        if self.debug:
-            print "P3 rpn time:{}s".format(end_time-start_time)
-        start_time = time.time()
         P2_rois = self.rpn(P2_feature, im_info, gt_boxes, gt_ishard, dontcare_areas, anchor_scales=[2,], _feat_stride=[4,])
-        end_time = time.time()
-        if self.debug:
-            print "P2 rpn time:{}s".format(end_time-start_time)
         if self.debug:
             print 'P5_rois:{},P4_rois:{},P3_rois:{},P2_rois:()'.format(P5_rois.size(), P4_rois.size(), P3_rois.size(), P2_rois.size())
 
         if self.training:
-            start_time = time.time()
             P5_roi_data = self.proposal_target_layer(P5_rois, gt_boxes, gt_ishard, dontcare_areas, self.n_classes)
             P5_rois = P5_roi_data[0]
             P4_roi_data = self.proposal_target_layer(P4_rois, gt_boxes, gt_ishard, dontcare_areas, self.n_classes)
@@ -297,38 +268,41 @@ class FasterRCNN(nn.Module):
             P3_rois = P3_roi_data[0]
             P2_roi_data = self.proposal_target_layer(P2_rois, gt_boxes, gt_ishard, dontcare_areas, self.n_classes)
             P2_rois = P2_roi_data[0]
-            end_time = time.time()
-            if self.debug:
-                print "Proposal target layer time:{}s".format(end_time-start_time)
 
         # roi pool
-        start_time = time.time()
         P5_cls_score, P5_cls_prob, P5_bbox_pred = self.roi_pool_basic_block(P5_feature, P5_rois)
         P4_cls_score, P4_cls_prob, P4_bbox_pred = self.roi_pool_basic_block(P4_feature, P4_rois)
         P3_cls_score, P3_cls_prob, P3_bbox_pred = self.roi_pool_basic_block(P3_feature, P3_rois)
         P2_cls_score, P2_cls_prob, P2_bbox_pred = self.roi_pool_basic_block(P2_feature, P2_rois)
-        end_time = time.time()
-        if self.debug:
-            print "roi pooling layer time:{}s".format(end_time-start_time)
-
-
-        cls_prob = np.vstack((P5_cls_prob, P4_cls_prob, P3_cls_prob, P2_cls_prob))
-        bbox_pred = np.vstack((P5_bbox_pred, P4_bbox_pred, P3_bbox_pred, P2_bbox_pred))
-        rois = np.vstack((P5_rois, P4_rois, P3_rois, P2_rois))     
 
         if self.training:
-            start_time = time.time()
-            P5_cross_entropy, P5_loss_box = self.build_loss(P5_cls_score, P5_bbox_pred, P5_roi_data)
-            P4_cross_entropy, P4_loss_box = self.build_loss(P4_cls_score, P4_bbox_pred, P4_roi_data)
-            P3_cross_entropy, P3_loss_box = self.build_loss(P3_cls_score, P3_bbox_pred, P3_roi_data)
-            P2_cross_entropy, P2_loss_box = self.build_loss(P2_cls_score, P2_bbox_pred, P2_roi_data)
-            self.cross_entropy = P5_cross_entropy + P4_cross_entropy + P3_cross_entropy + P2_cross_entropy
+            # vstask is quite slow, so at training phrase, I just don't stack them
+            cls_prob = P5_cls_prob
+            bbox_pred = P5_bbox_pred
+            rois = P5_rois
+        else:
+            cls_prob = np.vstack((P5_cls_prob, P4_cls_prob, P3_cls_prob, P2_cls_prob))
+            bbox_pred = np.vstack((P5_bbox_pred, P4_bbox_pred, P3_bbox_pred, P2_bbox_pred))
+            rois = np.vstack((P5_rois, P4_rois, P3_rois, P2_rois))   
+
+        if self.training:
+            P5_cross_entropy, P5_loss_box, tp1,tf1,fg_cnt1,bg_cnt1\
+                              = self.build_loss(P5_cls_score, P5_bbox_pred, P5_roi_data)
+            P4_cross_entropy, P4_loss_box, tp2,tf2,fg_cnt2,bg_cnt2\
+                              = self.build_loss(P4_cls_score, P4_bbox_pred, P4_roi_data)
+            P3_cross_entropy, P3_loss_box, tp3,tf3,fg_cnt3,bg_cnt3\
+                              = self.build_loss(P3_cls_score, P3_bbox_pred, P3_roi_data)
+            P2_cross_entropy, P2_loss_box, tp4,tf4,fg_cnt4,bg_cnt4\
+                              = self.build_loss(P2_cls_score, P2_bbox_pred, P2_roi_data)
+            self.cross_entropy = P5_cross_entropy + P4_cross_entropy + P3_cross_entropy +P2_cross_entropy
             self.loss_box = P5_loss_box + P4_loss_box + P3_loss_box + P2_loss_box
-            end_time = time.time()
-            if self.debug:
-                 print "build loss time:{}s".format(end_time-start_time)
+            self.tp = tp1+tp2+tp3+tp4
+            self.tf = tf1+tf2+tf3+tf4
+            self.fg_cnt = fg_cnt1+fg_cnt2+fg_cnt3+fg_cnt4
+            self.bg_cnt = bg_cnt1+bg_cnt2+bg_cnt3+bg_cnt4
 
         return cls_prob, bbox_pred, rois
+
 
     def  _clip_feature(self, topdown_fea, lateral_fea):
         if topdown_fea.size() == lateral_fea.size():
@@ -357,13 +331,11 @@ class FasterRCNN(nn.Module):
         fg_cnt = torch.sum(label.data.ne(0))
         bg_cnt = label.data.numel() - fg_cnt
 
-        # for log
-        if self.debug:
-            maxv, predict = cls_score.data.max(1)
-            self.tp = torch.sum(predict[:fg_cnt].eq(label.data[:fg_cnt])) if fg_cnt > 0 else 0
-            self.tf = torch.sum(predict[fg_cnt:].eq(label.data[fg_cnt:])) if bg_cnt > 0 and len(predict)-fg_cnt > 0 else 0
-            self.fg_cnt = fg_cnt
-            self.bg_cnt = bg_cnt
+        maxv, predict = cls_score.data.max(1)
+        tp = torch.sum(predict[:fg_cnt].eq(label.data[:fg_cnt])) if fg_cnt > 0 else 0
+        tf = torch.sum(predict[fg_cnt:].eq(label.data[fg_cnt:])) if bg_cnt > 0 and len(predict)-fg_cnt > 0 else 0
+        fg_cnt = fg_cnt
+        bg_cnt = bg_cnt
 
         ce_weights = torch.ones(cls_score.size()[1])
         ce_weights[0] = float(fg_cnt) / (bg_cnt + 1e-4)
@@ -377,7 +349,7 @@ class FasterRCNN(nn.Module):
 
         loss_box = F.smooth_l1_loss(bbox_pred, bbox_targets, size_average=False) / (fg_cnt + 1e-4)
 
-        return cross_entropy, loss_box
+        return cross_entropy, loss_box, tp,tf,fg_cnt,bg_cnt
 
     @staticmethod
     def proposal_target_layer(rpn_rois, gt_boxes, gt_ishard, dontcare_areas, num_classes):
