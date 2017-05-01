@@ -98,3 +98,4 @@ demo_mot.py
 data/
 models
 output
+*.sw[op]
