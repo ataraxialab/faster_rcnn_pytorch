@@ -54,7 +54,10 @@ def image_ratio_check(index, image_ratio=[0.462,6.868],bbox_ratio=[0.117,15.5]):
 
     ## image width and height is not the same with xml
     image_path = os.path.join(IMAGE_ROOT, 'Data', 'DET', 'train', index + '.JPEG')
-    im = Image.open(image_path)
+    try:
+        im = Image.open(image_path)
+    except:
+        return False
     if im.size[0] != width or im.size[1] != height:
         print "Image size wxh {} {}x{} ".format(im.size, width, height)
         return False
