@@ -57,6 +57,7 @@ def image_ratio_check(index, image_ratio=[0.462,6.868],bbox_ratio=[0.117,15.5]):
     try:
         im = Image.open(image_path)
     except:
+        print "image cannot open:{}".format(image_path)
         return False
     if im.size[0] != width or im.size[1] != height:
         print "Image size wxh {} {}x{} ".format(im.size, width, height)
@@ -71,6 +72,9 @@ def image_ratio_check(index, image_ratio=[0.462,6.868],bbox_ratio=[0.117,15.5]):
         return False
 
     objs = tree.findall('object')
+    if len(objs)==0:
+        print "no objs in image"
+        return False
     # bbox width and height ratio is too small or large
     for obj in objs:
         x1, y1, x2, y2 = extra_axis(obj)
