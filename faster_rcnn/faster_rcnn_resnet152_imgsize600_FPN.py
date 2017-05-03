@@ -275,15 +275,9 @@ class FasterRCNN(nn.Module):
         P3_cls_score, P3_cls_prob, P3_bbox_pred = self.roi_pool_basic_block(P3_feature, P3_rois)
         P2_cls_score, P2_cls_prob, P2_bbox_pred = self.roi_pool_basic_block(P2_feature, P2_rois)
 
-        if self.training:
-            # vstask is quite slow, so at training phrase, I just don't stack them
-            cls_prob = P5_cls_prob
-            bbox_pred = P5_bbox_pred
-            rois = P5_rois
-        else:
-            cls_prob = np.vstack((P5_cls_prob, P4_cls_prob, P3_cls_prob, P2_cls_prob))
-            bbox_pred = np.vstack((P5_bbox_pred, P4_bbox_pred, P3_bbox_pred, P2_bbox_pred))
-            rois = np.vstack((P5_rois, P4_rois, P3_rois, P2_rois))   
+        cls_prob = torch.cat([P5_cls_prob, P4_cls_prob, P3_cls_prob, P2_cls_prob])
+        bbox_pred = torch.cat([P5_bbox_pred, P4_bbox_pred, P3_bbox_pred, P2_bbox_pred])
+        rois = torch.cat([P5_rois, P4_rois, P3_rois, P2_rois])
 
         if self.training:
             P5_cross_entropy, P5_loss_box, tp1,tf1,fg_cnt1,bg_cnt1\
@@ -413,6 +407,7 @@ class FasterRCNN(nn.Module):
             dtype=np.float32)
 
         cls_prob, bbox_pred, rois = self(im_data, im_info)
+        # print "cls_prob:{},bbox_pred:{},rois:{}".format(cls_prob, bbox_pred,rois)
         pred_boxes, scores, classes = \
             self.interpret_faster_rcnn(cls_prob, bbox_pred, rois, im_info, image.shape, min_score=thr)
         return pred_boxes, scores, classes

@@ -20,6 +20,7 @@ from .coco import coco
 from .kittivoc import kittivoc
 from .imagenet import imagenet
 from .imagenet_small import imagenet_small
+from .imagenet_cache import imagenet_cache
 
 def _selective_search_IJCV_top_k(split, year, top_k):
     """Return an imdb that uses the top k proposals from the selective search
@@ -80,6 +81,12 @@ for year in ['2015']:
     for split in ['train', 'val']:
         name = 'imagenet_small_{}_{}'.format(year, split)
         __sets[name] = (lambda split=split, year=year: imagenet_small(split, year))
+
+# Set up imagenet_2015_<split>
+for year in ['2015']:
+    for split in ['train', 'val']:
+        name = 'imagenet_cache_{}_{}'.format(year, split)
+        __sets[name] = (lambda split=split, year=year: imagenet_cache(split, year))
 
 
 def get_imdb(name):

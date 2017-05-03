@@ -34,7 +34,7 @@ def log_print(text, color=None, on_color=None, attrs=None):
 # hyper-parameters
 # ------------
 print "initialize"
-imdb_name = 'imagenet_2015_train'
+imdb_name = 'imagenet_cache_2015_train'
 cfg_file = 'experiments/cfgs/faster_rcnn_end2end.yml'
 pretrained_model = '/disk2/data/pytorch_models/resnet152-b121ed2d.pth'
 output_dir = '/disk2/data/pytorch_models/trained_models/resnet152_imgsize600/saved_model3'
@@ -50,6 +50,14 @@ _DEBUG = True
 use_tensorboard = True
 remove_all_log = False   # remove all historical experiments in TensorBoard
 exp_name = None # the previous experiment name in TensorBoard
+_RESTART = True
+
+if _RESTART:
+    start_step = 0
+    end_step = 3500000
+    save_model_steps = 100000
+    lr_decay_steps = {1900000,2700000}
+    lr_decay = 1./10
 
 # ------------
 
@@ -80,7 +88,10 @@ print "initialize faster rcnn"
 net = FasterRCNN(classes=imdb.classes, debug=_DEBUG)
 network.weights_normal_init(net, dev=0.01)
 #network.load_pretrained_npy(net, pretrained_model)
-network.load_pretrained_pth(net, pretrained_model)
+if not _RESTART:
+    network.load_pretrained_pth(net, pretrained_model)
+else:
+    network.load_net(pretrained_model,net)
 
 net.cuda()
 net.train()
