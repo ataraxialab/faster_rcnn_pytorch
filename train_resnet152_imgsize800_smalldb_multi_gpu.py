@@ -1,7 +1,6 @@
 import collections
 
 from datetime import datetime
-import multiprocessing
 import threading
 import os
 
@@ -86,11 +85,19 @@ if use_tensorboard:
 
 
 class Future(object):
-    def __init__(self, pipe):
-        self.__pipe = pipe
+    def __init__(self):
+        self.__cond = threading.Condition()
+        self.__v = None
 
     def get(self):
-        return self.__pipe.recv()
+        self.__cond.acquire()
+        while self.__v is None:
+            self.__cond.wait()
+        return self.__v
+
+    def set(self, v):
+        with self.__cond:
+            self.__v = v
 
 
 # training
@@ -101,24 +108,32 @@ class GradUpdater(object):
     def __init__(self, count, device_id):
         self.__count = count
         self.__device_id = device_id
-        self.__grad_queue = multiprocessing.Queue(count)
+        self.__lock = threading.Lock()
         self.__grads = []
+        self.__update_cond = threading.Condition()
         self.__suspend_trainers = []
         self.__is_closed = False
 
     def step(self, grads):
-        p, c = multiprocessing.Pipe()
-        self.__grad_queue.put((p, grads))
-        return Future(c)
+        with self.__lock:
+            self.__grads.append(grads)
+            f = Future()
+            self.__suspend_trainers.append(f)
+            if len(self.__grads) == self.__count:
+                self.__update_cond.notify()
+        return f
 
     def is_all_step(self):
         with self.__lock:
             return self.__count == len(self.__grads)
 
+    def is_closed(self):
+        with self.__lock:
+            return self.__is_closed
+
     def close(self):
-        p, c = multiprocessing.Pipe()
-        self.__grad_queue.put((p, None))
-        return Future(c)
+        with self.__lock:
+            self.__is_closed = True
 
     def _calc_grad(self, gs):
         out = reduce(lambda x, y: torch.add(x, 1.0, y), gs,
@@ -127,22 +142,17 @@ class GradUpdater(object):
         return out
 
     def update(self):
-        pipes, grads = [], []
         while True:
-            p, g = self.__grad_queue.get()
-            print 'update grader recv:', p, g
-            if g is None:
-                break
+            self.__update_cond.acquire()
+            while not self.is_closed() and self.is_all_step():
+                self.__update_cond.wait()
 
-            pipes.append(p)
-            grads.append(g)
-
-            if len(grads) < self.__count:
-                continue
+            if self.is_closed():
+                return
 
             name2grads = collections.defaultdict(list)
-            for gs in grads:
-                for name, g in gs.items():
+            for grads in self.__grads:
+                for name, g in grads.items():
                     g.cuda(self.__device_id)
                     name2grads[name].append(g)
 
@@ -151,9 +161,8 @@ class GradUpdater(object):
                 for name, gs in name2grads.items()
             }
 
-            for p in pipes:
-                p.send(updated_grad)
-            pipes, grads = [], []
+            for f in self.__suspend_trainers:
+                f.set(updated_grad)
 
 
 def net_grads(net,
@@ -184,7 +193,7 @@ def update_net_grads(net, grads):
             continue
 
 
-def train(device_id, grad_updater):
+def train(device_id,  grad_updater):
     train_loss = 0
     tp, tf, fg, bg = 0., 0., 0, 0
     step_cnt = 0
@@ -332,14 +341,19 @@ def main():
     grad_updater = GradUpdater(gpu_count, 0)
     trainers = []
     for i in range(gpu_count):
-        trainers.append(
-            multiprocessing.Process(
-                target=train, name='trainer-%d' % i, args=(i, grad_updater)))
+        trainers.append(threading.Thread(target=train, args=(i, grad_updater)))
 
+    grad_updater_worker = threading.Thread(
+        target=lambda: grad_updater.update())
+
+    grad_updater_worker.start()
     for t in trainers:
         t.start()
 
-    grad_updater.update()
+    for t in trainers:
+        t.join()
+
+    grad_updater_worker.join()
 
 
 if __name__ == '__main__':
