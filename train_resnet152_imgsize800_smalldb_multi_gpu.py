@@ -184,7 +184,7 @@ def update_net_grads(net, grads):
             continue
 
 
-def train(device_id, net, optimizer, data_layer, grad_updater, params):
+def train(device_id, grad_updater):
     train_loss = 0
     tp, tf, fg, bg = 0., 0., 0, 0
     step_cnt = 0
@@ -192,6 +192,7 @@ def train(device_id, net, optimizer, data_layer, grad_updater, params):
     t = Timer()
     t.tic()
     lr = cfg.TRAIN.LEARNING_RATE
+    net, optimizer, data_layer, params = build_train_params(device_id)
 
     to_var = lambda x: network.np_to_variable(x).cuda(device_id) if x is not None else None
     for step in range(start_step, end_step + 1):
@@ -331,18 +332,14 @@ def main():
     grad_updater = GradUpdater(gpu_count, 0)
     trainers = []
     for i in range(gpu_count):
-        data_layer, net, optimizer, params = build_train_params(i)
         trainers.append(
             multiprocessing.Process(
-                target=train,
-                name='trainer-%d' % i,
-                args=(i, net, optimizer, data_layer, grad_updater, params)))
+                target=train, name='trainer-%d' % i, args=(i, grad_updater)))
 
     for t in trainers:
         t.start()
 
     grad_updater.update()
-
 
 
 if __name__ == '__main__':
