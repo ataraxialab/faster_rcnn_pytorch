@@ -336,7 +336,7 @@ def main():
             multiprocessing.Process(
                 target=train,
                 name='trainer-%d' % i,
-                args=(i, net, optimizer, data_layer, grad_updater)))
+                args=(i, net, optimizer, data_layer, grad_updater, params)))
 
     for t in trainers:
         t.start()
