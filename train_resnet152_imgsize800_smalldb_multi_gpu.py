@@ -161,6 +161,8 @@ class GradUpdater(object):
                 for name, gs in name2grads.items()
             }
 
+            self.__grads = []
+
             for f in self.__suspend_trainers:
                 f.set(updated_grad)
 
@@ -193,7 +195,8 @@ def update_net_grads(net, grads):
             continue
 
 
-def train(device_id,  grad_updater):
+def train(device_id, net, optimizer, data_layer, params, grad_updater):
+    print 'do training...........'
     train_loss = 0
     tp, tf, fg, bg = 0., 0., 0, 0
     step_cnt = 0
@@ -201,7 +204,6 @@ def train(device_id,  grad_updater):
     t = Timer()
     t.tic()
     lr = cfg.TRAIN.LEARNING_RATE
-    net, optimizer, data_layer, params = build_train_params(device_id)
 
     to_var = lambda x: network.np_to_variable(x).cuda(device_id) if x is not None else None
     for step in range(start_step, end_step + 1):
@@ -229,8 +231,11 @@ def train(device_id,  grad_updater):
 
         # backward
         optimizer.zero_grad()
-        print threading.current_thread().name, 'backward begin'
-        loss.cuda(device_id).backward()
+        print threading.current_thread().name, 'torch._C._cuda_getDevice', torch._C._cuda_getDevice(), 'device id', device_id, 'backward begin'
+        loss = loss.cuda(device_id)
+        with torch.cuda.device_of(loss):
+            print 'now cuda_getDevice', torch._C._cuda_getDevice()
+            loss.backward()
         print threading.current_thread().name, 'backward end'
         network.clip_gradient(net, 10.)
         optimizer.step()
@@ -328,12 +333,12 @@ def build_train_params(device_id):
     net.cuda(device_id)
     net.train()
     params = list(net.parameters())
-    print params[435].size()
+    print 'params[435].size', params[435].size()
     # optimizer = torch.optim.Adam(params[-8:], lr=lr)
     optimizer = torch.optim.SGD(
         params[435:], lr=lr, momentum=momentum, weight_decay=weight_decay)
 
-    return data_layer, net, optimizer, params
+    return net, optimizer, data_layer, params
 
 
 def main():
@@ -341,13 +346,15 @@ def main():
     grad_updater = GradUpdater(gpu_count, 0)
     trainers = []
     for i in range(gpu_count):
-        trainers.append(threading.Thread(target=train, args=(i, grad_updater)))
+        net, optimizer, data_layer, params = build_train_params(i)
+        trainers.append(threading.Thread(target=train, args=(i,net, optimizer, data_layer, params, grad_updater)))
 
     grad_updater_worker = threading.Thread(
         target=lambda: grad_updater.update())
 
     grad_updater_worker.start()
     for t in trainers:
+        print 'start trainer', t.name
         t.start()
 
     for t in trainers:
@@ -356,5 +363,6 @@ def main():
     grad_updater_worker.join()
 
 
+print '__name__', __name__
 if __name__ == '__main__':
     main()
