@@ -1,4 +1,5 @@
 import torch
+import torch.cuda
 import torch.nn as nn
 from torch.autograd import Variable
 import numpy as np
@@ -93,7 +94,7 @@ def load_pretrained_pth(faster_rcnn_model, fname):
 def np_to_variable(x, is_cuda=True, dtype=torch.FloatTensor):
     v = Variable(torch.from_numpy(x).type(dtype))
     if is_cuda:
-        v = v.cuda()
+        v = v.cuda(torch.cuda.current_device())
     return v
 
 

@@ -1,14 +1,18 @@
 import collections
+
 from datetime import datetime
+import multiprocessing
 import threading
 import os
 
 import torch
 import torch.cuda
+import torch.autograd
+import torch.nn
 import numpy as np
 
 from faster_rcnn import network
-from faster_rcnn.faster_rcnn_resnet152_imgsize800 import FasterRCNN
+from faster_rcnn.faster_rcnn_resnet152_imgsize800_multi_gpu import FasterRCNN
 from faster_rcnn.utils.timer import Timer
 
 import faster_rcnn.roi_data_layer.roidb as rdl_roidb
@@ -37,7 +41,7 @@ def log_print(text, color=None, on_color=None, attrs=None):
 # hyper-parameters
 # ------------
 print "initialize"
-imdb_name = 'imagenet_small_2015_train'
+imdb_name = 'imagenet_2015_train'
 cfg_file = 'experiments/cfgs/faster_rcnn_end2end.yml'
 pretrained_model = '/disk2/data/pytorch_models/resnet152-b121ed2d.pth'
 output_dir = '/disk2/data/pytorch_models/trained_models/resnet152_imgsize600/saved_model3'
@@ -68,35 +72,6 @@ weight_decay = cfg.TRAIN.WEIGHT_DECAY
 disp_interval = cfg.TRAIN.DISPLAY
 log_interval = cfg.TRAIN.LOG_IMAGE_ITERS
 
-# load data
-print "load data"
-imdb = get_imdb(imdb_name)
-print "prepare roidb"
-rdl_roidb.prepare_roidb(imdb)
-print "done"
-roidb = imdb.roidb
-print "ROIDataLayer"
-data_layer = RoIDataLayer(roidb, imdb.num_classes)
-
-# load netZZ
-print "initialize faster rcnn"
-net = FasterRCNN(classes=imdb.classes, debug=_DEBUG)
-network.weights_normal_init(net, dev=0.01)
-#network.load_pretrained_npy(net, pretrained_model)
-network.load_pretrained_pth(net, pretrained_model)
-
-if not os.path.exists(output_dir):
-    os.mkdir(output_dir)
-
-net.cuda()
-net.train()
-
-params = list(net.parameters())
-print params[435].size()
-# optimizer = torch.optim.Adam(params[-8:], lr=lr)
-optimizer = torch.optim.SGD(
-    params[435:], lr=lr, momentum=momentum, weight_decay=weight_decay)
-
 # tensorboad
 use_tensorboard = use_tensorboard and CrayonClient is not None
 if use_tensorboard:
@@ -111,18 +86,11 @@ if use_tensorboard:
 
 
 class Future(object):
-    def __init__(self):
-        self.__cond = threading.Condition()
+    def __init__(self, pipe):
+        self.__pipe = pipe
 
     def get(self):
-        self.__cond.acquire()
-        while self.__v is None:
-            self.__cond.wait()
-        return self.__v
-
-    def set(self, v):
-        with self.__cond:
-            self.__v = v
+        return self.__pipe.recv()
 
 
 # training
@@ -133,65 +101,74 @@ class GradUpdater(object):
     def __init__(self, count, device_id):
         self.__count = count
         self.__device_id = device_id
-        self.__lock = threading.Lock()
+        self.__grad_queue = multiprocessing.Queue(count)
         self.__grads = []
-        self.__update_cond = threading.Condition()
         self.__suspend_trainers = []
         self.__is_closed = False
 
     def step(self, grads):
-        with self.__lock:
-            self.__grads.append(grads)
-            f = Future()
-            self.__suspend_trainers.append(f)
-            if len(self.__grads) == self.__count:
-                self.__update_cond.notify()
-        return f
+        p, c = multiprocessing.Pipe()
+        self.__grad_queue.put((p, grads))
+        return Future(c)
 
     def is_all_step(self):
         with self.__lock:
             return self.__count == len(self.__grads)
 
-    def is_closed(self):
-        with self.__lock:
-            return self.__is_closed
-
     def close(self):
-        with self.__lock:
-            self.__is_closed = True
+        p, c = multiprocessing.Pipe()
+        self.__grad_queue.put((p, None))
+        return Future(c)
 
     def _calc_grad(self, gs):
-        out = reduce(lambda x, y: torch.add(x, 1, y), gs, torch.zeros(*gs[0]))
+        out = reduce(lambda x, y: torch.add(x, 1.0, y), gs,
+                     torch.zeros(*gs[0].size()).cuda(self.__device_id))
         torch.div(out, len(gs))
         return out
 
     def update(self):
+        pipes, grads = [], []
         while True:
-            self.__update_cond.acquire()
-            while not self.is_closed() and self.is_all_step():
-                self.__update_cond.wait()
+            p, g = self.__grad_queue.get()
+            print 'update grader recv:', p, g
+            if g is None:
+                break
 
-            if self.is_closed():
-                return
+            pipes.append(p)
+            grads.append(g)
+
+            if len(grads) < self.__count:
+                continue
 
             name2grads = collections.defaultdict(list)
-            for grads in self.__grads:
-                for name, g in grads:
+            for gs in grads:
+                for name, g in gs.items():
                     g.cuda(self.__device_id)
                     name2grads[name].append(g)
 
             updated_grad = {
                 name: self._calc_grad(gs)
-                for name, gs in name2grads
+                for name, gs in name2grads.items()
             }
 
-            for f in self.__suspend_trainers:
-                f.set(updated_grad)
+            for p in pipes:
+                p.send(updated_grad)
+            pipes, grads = [], []
 
 
 def net_grads(net,
               rule=lambda k: k.endswith('.bias') or k.endswith('.weight')):
-    return {k: v.data.grad for k, v in net.state_dict().items() if rule(k)}
+    ret = {}
+    for k, v in net.state_dict().items():
+        if not rule(k):
+            continue
+        if isinstance(v, torch.cuda.FloatTensor):
+            ret[k] = v
+            continue
+        if isinstance(v, torch.autograd.Variable):
+            ret[k] = v.data.grad
+        print 'unknow type', type(v)
+    return ret
 
 
 def update_net_grads(net, grads):
@@ -199,10 +176,15 @@ def update_net_grads(net, grads):
     for name, s in state:
         if name not in grads:
             continue
-        s.date.grad.copy(grads[name])
+        if isinstance(s, torch.cuda.FloatTensor):
+            s.copy(grads[name])
+            continue
+        if isinstance(s, torch.autograd.Variable):
+            s.date.grad.copy(grads[name])
+            continue
 
 
-def train(device_id, net, optimizer, data_layer, grad_updater):
+def train(device_id, net, optimizer, data_layer, grad_updater, params):
     train_loss = 0
     tp, tf, fg, bg = 0., 0., 0, 0
     step_cnt = 0
@@ -211,15 +193,16 @@ def train(device_id, net, optimizer, data_layer, grad_updater):
     t.tic()
     lr = cfg.TRAIN.LEARNING_RATE
 
+    to_var = lambda x: network.np_to_variable(x).cuda(device_id) if x is not None else None
     for step in range(start_step, end_step + 1):
         print "step:{}".format(step)
         # get one batch
         blobs = data_layer.forward()
-        im_data = blobs['data']
-        im_info = blobs['im_info']
-        gt_boxes = blobs['gt_boxes']
-        gt_ishard = blobs['gt_ishard']
-        dontcare_areas = blobs['dontcare_areas']
+        im_data = to_var(blobs['data'])
+        im_info = to_var(blobs['im_info'])
+        gt_boxes = to_var(blobs['gt_boxes'])
+        gt_ishard = to_var(blobs['gt_ishard'])
+        dontcare_areas = to_var(blobs['dontcare_areas'])
 
         # forward
         net(im_data, im_info, gt_boxes, gt_ishard, dontcare_areas)
@@ -236,13 +219,19 @@ def train(device_id, net, optimizer, data_layer, grad_updater):
 
         # backward
         optimizer.zero_grad()
-        loss.backward()
+        print threading.current_thread().name, 'backward begin'
+        loss.cuda(device_id).backward()
+        print threading.current_thread().name, 'backward end'
         network.clip_gradient(net, 10.)
         optimizer.step()
 
-        f = grad_updater.step(net_grads(net))
+        grads = net_grads(net)
+        print threading.current_thread().name, 'step grads'
+        f = grad_updater.step(grads)
         grads = f.get()
+        print threading.current_thread().name, 'update grads'
         update_net_grads(net, grads)
+        print threading.current_thread().name, 'update done'
 
         if step % disp_interval == 0:
             duration = t.toc(average=False)
@@ -306,7 +295,7 @@ def train(device_id, net, optimizer, data_layer, grad_updater):
     grad_updater.close()
 
 
-def build_train_params():
+def build_train_params(device_id):
     # load data
     print "load data"
     imdb = get_imdb(imdb_name)
@@ -326,6 +315,7 @@ def build_train_params():
 
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
+    net.cuda(device_id)
     net.train()
     params = list(net.parameters())
     print params[435].size()
@@ -333,7 +323,7 @@ def build_train_params():
     optimizer = torch.optim.SGD(
         params[435:], lr=lr, momentum=momentum, weight_decay=weight_decay)
 
-    return data_layer, net, optimizer
+    return data_layer, net, optimizer, params
 
 
 def main():
@@ -341,19 +331,19 @@ def main():
     grad_updater = GradUpdater(gpu_count, 0)
     trainers = []
     for i in range(gpu_count):
-        data_layer, net, optimizer = build_train_params()
+        data_layer, net, optimizer, params = build_train_params(i)
         trainers.append(
-            threading.Thread(
+            multiprocessing.Process(
                 target=train,
+                name='trainer-' + i,
                 args=(i, net, optimizer, data_layer, grad_updater)))
 
-    grad_updater_worker = threading.Thread(target=lambda:grad_updater.update())
-
-    grad_updater_worker.start()
     for t in trainers:
         t.start()
 
-    for t in trainers:
-        t.join()
+    grad_updater.update()
 
-    grad_updater_worker.join()
+
+
+if __name__ == '__main__':
+    main()

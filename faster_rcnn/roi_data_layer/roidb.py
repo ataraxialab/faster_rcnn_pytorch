@@ -28,7 +28,7 @@ def prepare_roidb(imdb):
     print "roidb.py"
     sizes = [PIL.Image.open(imdb.image_path_at(i)).size
              for i in xrange(imdb.num_images)]
-    print "num of images:{}".format(len(sizes)):
+    print "num of images:{}".format(len(sizes))
     roidb = imdb.roidb
     for i in xrange(len(imdb.image_index)):
         roidb[i]['image'] = imdb.image_path_at(i)
