@@ -34,15 +34,15 @@ DataParallel只做到了前向的多GPU功能。无法实现需求。
 
 #### 框架
 
-![multi-gpu-arch](doc/multi-gpu-arch.png)
+![multi-gpu-arch](multi-gpu-arch.png)
 
 #### tainner流程
 
-![trainer](doc/trainer-flow.png)
+![trainer](trainer-flow.png)
 
 #### parameter updater 流程
 
-![](doc/param-updater.png)
+![](param-updater.png)
 
 
 
